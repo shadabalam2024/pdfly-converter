@@ -5,21 +5,19 @@ import os
 import tempfile
 import uuid
 import shutil
+import glob
 
 app = Flask(__name__)
 CORS(app)
 
-# Find LibreOffice executable across different systems
 def find_libreoffice():
     paths = [
-        'libreoffice',
-        'soffice',
-        '/usr/bin/libreoffice',
-        '/usr/bin/soffice',
+        'libreoffice', 'soffice',
+        '/usr/bin/libreoffice', '/usr/bin/soffice',
         '/usr/lib/libreoffice/program/soffice',
         '/opt/libreoffice/program/soffice',
-        '/Applications/LibreOffice.app/Contents/MacOS/soffice',  # Mac
-        r'C:\Program Files\LibreOffice\program\soffice.exe',      # Windows
+        '/Applications/LibreOffice.app/Contents/MacOS/soffice',
+        r'C:\Program Files\LibreOffice\program\soffice.exe',
     ]
     for path in paths:
         if shutil.which(path) or os.path.exists(path):
@@ -45,7 +43,9 @@ def pdf_to_word():
         return jsonify({ 'error': 'LibreOffice is not installed on the server' }), 500
 
     tmp_dir = tempfile.mkdtemp()
-    pdf_path = os.path.join(tmp_dir, f'{uuid.uuid4()}.pdf')
+    # Keep original filename so LibreOffice output is predictable
+    safe_name = f"{uuid.uuid4()}.pdf"
+    pdf_path = os.path.join(tmp_dir, safe_name)
     file.save(pdf_path)
 
     try:
@@ -57,10 +57,16 @@ def pdf_to_word():
         if result.returncode != 0:
             return jsonify({ 'error': 'Conversion failed', 'details': result.stderr }), 500
 
-        docx_path = pdf_path.replace('.pdf', '.docx')
-        if not os.path.exists(docx_path):
-            return jsonify({ 'error': 'Output file not found' }), 500
+        # Find any .docx file in tmp_dir (LibreOffice names it based on input)
+        docx_files = glob.glob(os.path.join(tmp_dir, '*.docx'))
+        if not docx_files:
+            return jsonify({
+                'error': 'Output file not found',
+                'stdout': result.stdout,
+                'stderr': result.stderr
+            }), 500
 
+        docx_path = docx_files[0]
         original_name = file.filename.replace('.pdf', '.docx')
         return send_file(docx_path, as_attachment=True, download_name=original_name,
                          mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
@@ -71,7 +77,7 @@ def pdf_to_word():
         return jsonify({ 'error': str(e) }), 500
     finally:
         try:
-            os.remove(pdf_path)
+            shutil.rmtree(tmp_dir)
         except:
             pass
 
