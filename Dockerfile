@@ -1,8 +1,7 @@
 FROM python:3.11-slim
 
-# Install LibreOffice
 RUN apt-get update && \
-    apt-get install -y libreoffice libreoffice-writer --no-install-recommends && \
+    apt-get install -y libreoffice libreoffice-writer poppler-utils --no-install-recommends && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -12,5 +11,5 @@ RUN pip install -r requirements.txt
 
 COPY app.py .
 
-EXPOSE 5000
+EXPOSE 10000
 CMD gunicorn --bind 0.0.0.0:$PORT app:app
