@@ -16,8 +16,6 @@ def find_libreoffice():
         '/usr/bin/libreoffice', '/usr/bin/soffice',
         '/usr/lib/libreoffice/program/soffice',
         '/opt/libreoffice/program/soffice',
-        '/Applications/LibreOffice.app/Contents/MacOS/soffice',
-        r'C:\Program Files\LibreOffice\program\soffice.exe',
     ]
     for path in paths:
         if shutil.which(path) or os.path.exists(path):
@@ -36,6 +34,36 @@ def test_lo():
         return jsonify({ 'error': 'LibreOffice not found' }), 500
     result = subprocess.run([lo, '--version'], capture_output=True, text=True)
     return jsonify({ 'stdout': result.stdout, 'stderr': result.stderr, 'returncode': result.returncode })
+
+@app.route('/test-convert', methods=['GET'])
+def test_convert():
+    """Creates a tiny test PDF and converts it to check if pipeline works"""
+    lo_path = find_libreoffice()
+    if not lo_path:
+        return jsonify({ 'error': 'LibreOffice not found' }), 500
+
+    tmp_dir = tempfile.mkdtemp()
+    # Create a minimal test text file and convert to docx
+    txt_path = os.path.join(tmp_dir, 'test.txt')
+    with open(txt_path, 'w') as f:
+        f.write('Hello from PDFly conversion test.')
+
+    try:
+        result = subprocess.run([
+            lo_path, '--headless', '--convert-to', 'docx',
+            '--outdir', tmp_dir, txt_path
+        ], capture_output=True, text=True, timeout=60)
+
+        docx_files = glob.glob(os.path.join(tmp_dir, '*.docx'))
+        return jsonify({
+            'returncode': result.returncode,
+            'stdout': result.stdout,
+            'stderr': result.stderr,
+            'docx_found': len(docx_files) > 0,
+            'files_in_tmp': os.listdir(tmp_dir)
+        })
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 @app.route('/pdf-to-word', methods=['POST'])
 def pdf_to_word():
@@ -61,14 +89,14 @@ def pdf_to_word():
             '--outdir', tmp_dir, pdf_path
         ], capture_output=True, text=True, timeout=60)
 
-        # Find any .docx file in tmp_dir
         docx_files = glob.glob(os.path.join(tmp_dir, '*.docx'))
         if not docx_files:
             return jsonify({
                 'error': 'Output file not found',
                 'returncode': result.returncode,
                 'stdout': result.stdout,
-                'stderr': result.stderr
+                'stderr': result.stderr,
+                'files_in_tmp': os.listdir(tmp_dir)
             }), 500
 
         docx_path = docx_files[0]
@@ -85,10 +113,7 @@ def pdf_to_word():
     except Exception as e:
         return jsonify({ 'error': str(e) }), 500
     finally:
-        try:
-            shutil.rmtree(tmp_dir)
-        except:
-            pass
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
