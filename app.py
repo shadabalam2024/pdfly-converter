@@ -15,7 +15,6 @@ def find_libreoffice():
         'libreoffice', 'soffice',
         '/usr/bin/libreoffice', '/usr/bin/soffice',
         '/usr/lib/libreoffice/program/soffice',
-        '/opt/libreoffice/program/soffice',
     ]
     for path in paths:
         if shutil.which(path) or os.path.exists(path):
@@ -30,30 +29,21 @@ def index():
 @app.route('/test-lo')
 def test_lo():
     lo = find_libreoffice()
-    if not lo:
-        return jsonify({ 'error': 'LibreOffice not found' }), 500
     result = subprocess.run([lo, '--version'], capture_output=True, text=True)
     return jsonify({ 'stdout': result.stdout, 'stderr': result.stderr, 'returncode': result.returncode })
 
-@app.route('/test-convert', methods=['GET'])
+@app.route('/test-convert')
 def test_convert():
-    """Creates a tiny test PDF and converts it to check if pipeline works"""
     lo_path = find_libreoffice()
-    if not lo_path:
-        return jsonify({ 'error': 'LibreOffice not found' }), 500
-
     tmp_dir = tempfile.mkdtemp()
-    # Create a minimal test text file and convert to docx
     txt_path = os.path.join(tmp_dir, 'test.txt')
     with open(txt_path, 'w') as f:
         f.write('Hello from PDFly conversion test.')
-
     try:
         result = subprocess.run([
             lo_path, '--headless', '--convert-to', 'docx',
             '--outdir', tmp_dir, txt_path
         ], capture_output=True, text=True, timeout=60)
-
         docx_files = glob.glob(os.path.join(tmp_dir, '*.docx'))
         return jsonify({
             'returncode': result.returncode,
@@ -76,19 +66,35 @@ def pdf_to_word():
 
     lo_path = find_libreoffice()
     if not lo_path:
-        return jsonify({ 'error': 'LibreOffice is not installed on the server' }), 500
+        return jsonify({ 'error': 'LibreOffice not found' }), 500
 
     tmp_dir = tempfile.mkdtemp()
-    safe_name = f"{uuid.uuid4()}.pdf"
-    pdf_path = os.path.join(tmp_dir, safe_name)
+    pdf_path = os.path.join(tmp_dir, f'{uuid.uuid4()}.pdf')
     file.save(pdf_path)
 
     try:
-        result = subprocess.run([
-            lo_path, '--headless', '--convert-to', 'docx',
-            '--outdir', tmp_dir, pdf_path
-        ], capture_output=True, text=True, timeout=60)
+        # Step 1: Extract text from PDF using pdftotext
+        txt_path = pdf_path.replace('.pdf', '.txt')
+        txt_result = subprocess.run(
+            ['pdftotext', '-layout', pdf_path, txt_path],
+            capture_output=True, text=True, timeout=30
+        )
 
+        if txt_result.returncode != 0 or not os.path.exists(txt_path):
+            # Fallback: use LibreOffice directly on PDF
+            result = subprocess.run([
+                lo_path, '--headless', '--infilter=writer_pdf_import',
+                '--convert-to', 'docx',
+                '--outdir', tmp_dir, pdf_path
+            ], capture_output=True, text=True, timeout=60)
+        else:
+            # Step 2: Convert extracted text to docx via LibreOffice
+            result = subprocess.run([
+                lo_path, '--headless', '--convert-to', 'docx',
+                '--outdir', tmp_dir, txt_path
+            ], capture_output=True, text=True, timeout=60)
+
+        # Find output docx
         docx_files = glob.glob(os.path.join(tmp_dir, '*.docx'))
         if not docx_files:
             return jsonify({
@@ -96,20 +102,19 @@ def pdf_to_word():
                 'returncode': result.returncode,
                 'stdout': result.stdout,
                 'stderr': result.stderr,
-                'files_in_tmp': os.listdir(tmp_dir)
+                'files': os.listdir(tmp_dir)
             }), 500
 
-        docx_path = docx_files[0]
         original_name = file.filename.replace('.pdf', '.docx')
         return send_file(
-            docx_path,
+            docx_files[0],
             as_attachment=True,
             download_name=original_name,
             mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document'
         )
 
     except subprocess.TimeoutExpired:
-        return jsonify({ 'error': 'Conversion timed out — try a smaller PDF' }), 500
+        return jsonify({ 'error': 'Conversion timed out' }), 500
     except Exception as e:
         return jsonify({ 'error': str(e) }), 500
     finally:
