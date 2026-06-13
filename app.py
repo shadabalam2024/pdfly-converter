@@ -32,29 +32,6 @@ def test_lo():
     result = subprocess.run([lo, '--version'], capture_output=True, text=True)
     return jsonify({ 'stdout': result.stdout, 'stderr': result.stderr, 'returncode': result.returncode })
 
-@app.route('/test-convert')
-def test_convert():
-    lo_path = find_libreoffice()
-    tmp_dir = tempfile.mkdtemp()
-    txt_path = os.path.join(tmp_dir, 'test.txt')
-    with open(txt_path, 'w') as f:
-        f.write('Hello from PDFly conversion test.')
-    try:
-        result = subprocess.run([
-            lo_path, '--headless', '--convert-to', 'docx',
-            '--outdir', tmp_dir, txt_path
-        ], capture_output=True, text=True, timeout=60)
-        docx_files = glob.glob(os.path.join(tmp_dir, '*.docx'))
-        return jsonify({
-            'returncode': result.returncode,
-            'stdout': result.stdout,
-            'stderr': result.stderr,
-            'docx_found': len(docx_files) > 0,
-            'files_in_tmp': os.listdir(tmp_dir)
-        })
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-
 @app.route('/pdf-to-word', methods=['POST'])
 def pdf_to_word():
     if 'file' not in request.files:
@@ -73,29 +50,27 @@ def pdf_to_word():
     file.save(pdf_path)
 
     try:
-        # Step 1: Extract text from PDF using pdftotext
-        txt_path = pdf_path.replace('.pdf', '.txt')
-        txt_result = subprocess.run(
-            ['pdftotext', '-layout', pdf_path, txt_path],
-            capture_output=True, text=True, timeout=30
-        )
+        # Use LibreOffice Draw PDF import filter for best formatting
+        result = subprocess.run([
+            lo_path, '--headless',
+            '--infilter=writer_pdf_import',
+            '--convert-to', 'docx:MS Word 2007 XML',
+            '--outdir', tmp_dir,
+            pdf_path
+        ], capture_output=True, text=True, timeout=120)
 
-        if txt_result.returncode != 0 or not os.path.exists(txt_path):
-            # Fallback: use LibreOffice directly on PDF
-            result = subprocess.run([
-                lo_path, '--headless', '--infilter=writer_pdf_import',
-                '--convert-to', 'docx',
-                '--outdir', tmp_dir, pdf_path
-            ], capture_output=True, text=True, timeout=60)
-        else:
-            # Step 2: Convert extracted text to docx via LibreOffice
-            result = subprocess.run([
-                lo_path, '--headless', '--convert-to', 'docx',
-                '--outdir', tmp_dir, txt_path
-            ], capture_output=True, text=True, timeout=60)
-
-        # Find output docx
         docx_files = glob.glob(os.path.join(tmp_dir, '*.docx'))
+
+        # Fallback: try without infilter
+        if not docx_files:
+            result = subprocess.run([
+                lo_path, '--headless',
+                '--convert-to', 'docx',
+                '--outdir', tmp_dir,
+                pdf_path
+            ], capture_output=True, text=True, timeout=120)
+            docx_files = glob.glob(os.path.join(tmp_dir, '*.docx'))
+
         if not docx_files:
             return jsonify({
                 'error': 'Output file not found',
@@ -114,7 +89,7 @@ def pdf_to_word():
         )
 
     except subprocess.TimeoutExpired:
-        return jsonify({ 'error': 'Conversion timed out' }), 500
+        return jsonify({ 'error': 'Conversion timed out — try a smaller PDF' }), 500
     except Exception as e:
         return jsonify({ 'error': str(e) }), 500
     finally:
