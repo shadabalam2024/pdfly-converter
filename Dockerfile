@@ -1,7 +1,16 @@
 FROM python:3.11-slim
 
 RUN apt-get update && \
-    apt-get install -y libreoffice libreoffice-writer poppler-utils --no-install-recommends && \
+    apt-get install -y \
+    libreoffice \
+    libreoffice-writer \
+    libreoffice-draw \
+    libreoffice-impress \
+    libreoffice-java-common \
+    poppler-utils \
+    fonts-liberation \
+    fonts-dejavu \
+    --no-install-recommends && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
