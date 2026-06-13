@@ -4,13 +4,32 @@ import subprocess
 import os
 import tempfile
 import uuid
+import shutil
 
 app = Flask(__name__)
-CORS(app)  # Allow requests from your website
+CORS(app)
+
+# Find LibreOffice executable across different systems
+def find_libreoffice():
+    paths = [
+        'libreoffice',
+        'soffice',
+        '/usr/bin/libreoffice',
+        '/usr/bin/soffice',
+        '/usr/lib/libreoffice/program/soffice',
+        '/opt/libreoffice/program/soffice',
+        '/Applications/LibreOffice.app/Contents/MacOS/soffice',  # Mac
+        r'C:\Program Files\LibreOffice\program\soffice.exe',      # Windows
+    ]
+    for path in paths:
+        if shutil.which(path) or os.path.exists(path):
+            return path
+    return None
 
 @app.route('/')
 def index():
-    return jsonify({ 'status': 'PDFly Converter API is running' })
+    lo = find_libreoffice()
+    return jsonify({ 'status': 'running', 'libreoffice': lo or 'not found' })
 
 @app.route('/pdf-to-word', methods=['POST'])
 def pdf_to_word():
@@ -19,24 +38,25 @@ def pdf_to_word():
 
     file = request.files['file']
     if not file.filename.lower().endswith('.pdf'):
-        return jsonify({ 'error': 'Only PDF files are accepted' }), 400
+        return jsonify({ 'error': 'Only PDF files accepted' }), 400
 
-    # Save uploaded PDF to a temp folder
+    lo_path = find_libreoffice()
+    if not lo_path:
+        return jsonify({ 'error': 'LibreOffice is not installed on the server' }), 500
+
     tmp_dir = tempfile.mkdtemp()
     pdf_path = os.path.join(tmp_dir, f'{uuid.uuid4()}.pdf')
     file.save(pdf_path)
 
     try:
-        # Use LibreOffice to convert PDF → DOCX
         result = subprocess.run([
-            'libreoffice', '--headless', '--convert-to', 'docx',
+            lo_path, '--headless', '--convert-to', 'docx',
             '--outdir', tmp_dir, pdf_path
         ], capture_output=True, text=True, timeout=60)
 
         if result.returncode != 0:
             return jsonify({ 'error': 'Conversion failed', 'details': result.stderr }), 500
 
-        # Find the output .docx file
         docx_path = pdf_path.replace('.pdf', '.docx')
         if not os.path.exists(docx_path):
             return jsonify({ 'error': 'Output file not found' }), 500
@@ -50,7 +70,6 @@ def pdf_to_word():
     except Exception as e:
         return jsonify({ 'error': str(e) }), 500
     finally:
-        # Cleanup temp files
         try:
             os.remove(pdf_path)
         except:
